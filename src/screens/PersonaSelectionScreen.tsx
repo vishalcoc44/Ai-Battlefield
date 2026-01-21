@@ -1,48 +1,44 @@
-import React from 'react';
-import { View, StyleSheet, FlatList, Image } from 'react-native';
-import { Text, Card, Avatar, useTheme, Surface, IconButton } from 'react-native-paper';
+import React, { useEffect, useState } from 'react';
+import { View, StyleSheet, FlatList, ActivityIndicator } from 'react-native';
+import { Text, Card, Avatar, Surface, IconButton } from 'react-native-paper';
 import { useNavigation } from '@react-navigation/native';
 import { LinearGradient } from 'expo-linear-gradient';
+import { supabase } from '../lib/supabase';
 
-const PERSONAS = [
-	{
-		id: '1',
-		name: 'Thomas Sowell (2025)',
-		topic: 'Welfare & Economics',
-		avatar: 'https://upload.wikimedia.org/wikipedia/commons/thumb/1/14/Thomas_Sowell_2013.jpg/220px-Thomas_Sowell_2013.jpg',
-		description: 'Facts over feelings. Expect rigorous economic analysis.',
-		difficulty: 'Hard',
-	},
-	{
-		id: '2',
-		name: 'Richard Dawkins',
-		topic: 'Existence of God',
-		avatar: 'https://upload.wikimedia.org/wikipedia/commons/thumb/e/e8/Richard_Dawkins_Cooper_Union_2010.jpg/220px-Richard_Dawkins_Cooper_Union_2010.jpg',
-		description: 'Unapologetic rationalism and evolutionary biology.',
-		difficulty: 'Hard',
-	},
-	{
-		id: '3',
-		name: 'Scott Alexander + Bryan Caplan',
-		topic: 'Open Borders',
-		avatar: 'https://pbs.twimg.com/profile_images/1234567890/placeholder.jpg',
-		description: 'Utilitarian ethics meets libertarian economics.',
-		difficulty: 'Medium',
-	},
-	{
-		id: '4',
-		name: 'The Devil\'s Advocate',
-		topic: 'Any Topic',
-		avatar: 'https://cdn-icons-png.flaticon.com/512/190/190609.png',
-		description: 'The smartest living expert who disagrees with you.',
-		difficulty: 'Extreme',
-	},
-];
+interface Persona {
+	id: string;
+	name: string;
+	topic: string;
+	avatar_url: string;
+	description: string;
+	difficulty: string;
+	personality_prompt: string;
+}
 
 export default function PersonaSelectionScreen() {
 	const navigation = useNavigation<any>();
+	const [personas, setPersonas] = useState<Persona[]>([]);
+	const [loading, setLoading] = useState(true);
 
-	const renderItem = ({ item }: { item: typeof PERSONAS[0] }) => (
+	useEffect(() => {
+		loadPersonas();
+	}, []);
+
+	const loadPersonas = async () => {
+		setLoading(true);
+		const { data, error } = await supabase
+			.from('personas')
+			.select('*')
+			.eq('is_active', true)
+			.order('difficulty', { ascending: true });
+
+		if (!error && data) {
+			setPersonas(data);
+		}
+		setLoading(false);
+	};
+
+	const renderItem = ({ item }: { item: Persona }) => (
 		<Surface style={styles.cardContainer} elevation={4}>
 			<Card
 				style={styles.card}
@@ -50,7 +46,7 @@ export default function PersonaSelectionScreen() {
 				contentStyle={styles.cardInner}
 			>
 				<View style={styles.row}>
-					<Avatar.Image size={70} source={{ uri: item.avatar }} style={styles.avatar} />
+					<Avatar.Image size={70} source={{ uri: item.avatar_url }} style={styles.avatar} />
 					<View style={styles.textContainer}>
 						<View style={styles.headerRow}>
 							<Text variant="titleMedium" style={styles.name}>{item.name}</Text>
@@ -67,6 +63,16 @@ export default function PersonaSelectionScreen() {
 		</Surface>
 	);
 
+	if (loading) {
+		return (
+			<View style={[styles.container, styles.centered]}>
+				<LinearGradient colors={['#0f0c29', '#302b63', '#24243e']} style={styles.background}>
+					<ActivityIndicator size="large" color="#BB86FC" />
+				</LinearGradient>
+			</View>
+		);
+	}
+
 	return (
 		<View style={styles.container}>
 			<LinearGradient
@@ -80,7 +86,7 @@ export default function PersonaSelectionScreen() {
 				</View>
 
 				<FlatList
-					data={PERSONAS}
+					data={personas}
 					renderItem={renderItem}
 					keyExtractor={(item) => item.id}
 					contentContainerStyle={styles.list}
@@ -97,6 +103,10 @@ const styles = StyleSheet.create({
 	},
 	background: {
 		flex: 1,
+	},
+	centered: {
+		justifyContent: 'center',
+		alignItems: 'center',
 	},
 	header: {
 		flexDirection: 'row',

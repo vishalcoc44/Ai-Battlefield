@@ -1,7 +1,7 @@
 import React from 'react';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
-import { Provider as PaperProvider, MD3DarkTheme } from 'react-native-paper';
+import { Provider as PaperProvider, MD3DarkTheme, ActivityIndicator } from 'react-native-paper';
 import { AuthProvider, useAuth } from './src/context/AuthContext';
 import AuthScreen from './src/screens/AuthScreen';
 import HomeScreen from './src/screens/HomeScreen';
@@ -15,7 +15,9 @@ import BlindSpotScreen from './src/screens/BlindSpotScreen';
 import DeEscalationScreen from './src/screens/DeEscalationScreen';
 import PredictionScreen from './src/screens/PredictionScreen';
 import AnonymousLobbyScreen from './src/screens/AnonymousLobbyScreen';
+import CommunitiesScreen from './src/screens/CommunitiesScreen';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { View, StyleSheet } from 'react-native';
 
 const Stack = createNativeStackNavigator();
 
@@ -33,11 +35,25 @@ function Navigation() {
   const { session, loading } = useAuth();
 
   if (loading) {
-    return null; // Or a loading spinner
+    return (
+      <View style={styles.loadingContainer}>
+        <ActivityIndicator size="large" color="#BB86FC" />
+      </View>
+    );
   }
 
   return (
-    <Stack.Navigator screenOptions={{ headerShown: false }}>
+    <Stack.Navigator
+      screenOptions={{
+        headerShown: false,
+        contentStyle: { backgroundColor: '#121212' },
+        animation: 'fade',
+        animationDuration: 150,
+        presentation: 'card',
+        cardStyle: { backgroundColor: '#121212' },
+        cardOverlayEnabled: false,
+      }}
+    >
       {session && session.user ? (
         <>
           <Stack.Screen name="Home" component={HomeScreen} />
@@ -51,6 +67,7 @@ function Navigation() {
           <Stack.Screen name="DeEscalation" component={DeEscalationScreen} />
           <Stack.Screen name="Prediction" component={PredictionScreen} />
           <Stack.Screen name="AnonymousLobby" component={AnonymousLobbyScreen} />
+          <Stack.Screen name="Communities" component={CommunitiesScreen} />
         </>
       ) : (
         <Stack.Screen name="Auth" component={AuthScreen} />
@@ -59,9 +76,18 @@ function Navigation() {
   );
 }
 
+const styles = StyleSheet.create({
+  loadingContainer: {
+    flex: 1,
+    backgroundColor: '#121212',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+});
+
 export default function App() {
   return (
-    <SafeAreaProvider>
+    <SafeAreaProvider style={{ backgroundColor: '#121212' }}>
       <PaperProvider theme={theme}>
         <AuthProvider>
           <NavigationContainer>

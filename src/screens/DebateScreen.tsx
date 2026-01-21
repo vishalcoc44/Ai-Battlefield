@@ -1,15 +1,184 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { View, StyleSheet, ScrollView, KeyboardAvoidingView, Platform, TouchableOpacity, Image } from 'react-native';
+import { View, StyleSheet, ScrollView, KeyboardAvoidingView, Platform, TouchableOpacity, Image, Alert } from 'react-native';
 import { Text, TextInput, IconButton, Surface, Avatar, ActivityIndicator } from 'react-native-paper';
 import { useRoute, useNavigation } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
+import { useAuth } from '../context/AuthContext';
+import {
+	createDebate,
+	getDebate,
+	getDebateMessages,
+	saveDebateMessage,
+	generateAIDebateResponse,
+	factCheckClaim,
+	updateDebateSteelManLevel,
+	endDebate,
+	DebateMessage
+} from '../services/debateService';
+import { supabase } from '../lib/supabase';
 
 const DebateScreen = () => {
 	const navigation = useNavigation();
 	const route = useRoute();
 	const insets = useSafeAreaInsets();
+	const { user } = useAuth();
 	const [inputText, setInputText] = useState('');
+	const [messages, setMessages] = useState<DebateMessage[]>([]);
+	const [debate, setDebate] = useState<any>(null);
+	const [persona, setPersona] = useState<any>(null);
+	const [loading, setLoading] = useState(true);
+	const [sending, setSending] = useState(false);
+	const [steelManLevel, setSteelManLevel] = useState(0.5);
+	const scrollViewRef = useRef<ScrollView>(null);
+
+	useEffect(() => {
+		initializeDebate();
+	}, []);
+
+	const initializeDebate = async () => {
+		if (!user) return;
+
+		try {
+			setLoading(true);
+			const params = route.params as any;
+			const { personaId, topic } = params || {};
+
+			if (!personaId || !topic) {
+				Alert.alert('Error', 'Missing debate parameters');
+				navigation.goBack();
+				return;
+			}
+
+			// Fetch persona details
+			const { data: personaData } = await supabase
+				.from('personas')
+				.select('*')
+				.eq('id', personaId)
+				.single();
+
+			if (!personaData) {
+				Alert.alert('Error', 'Persona not found');
+				navigation.goBack();
+				return;
+			}
+
+			setPersona(personaData);
+
+			// Create or get existing debate
+			const debateData = await createDebate(user.id, personaId, topic);
+			if (!debateData) {
+				Alert.alert('Error', 'Failed to create debate');
+				navigation.goBack();
+				return;
+			}
+
+			setDebate(debateData);
+			setSteelManLevel(debateData.steel_man_level);
+
+			// Fetch existing messages
+			const existingMessages = await getDebateMessages(debateData.id);
+			setMessages(existingMessages);
+
+		} catch (error) {
+			console.error('Error initializing debate:', error);
+			Alert.alert('Error', 'Failed to initialize debate');
+		} finally {
+			setLoading(false);
+		}
+	};
+
+	const handleSendMessage = async () => {
+		if (!inputText.trim() || !debate || sending) return;
+
+		try {
+			setSending(true);
+
+			// Save user message
+			const userMessage = await saveDebateMessage(debate.id, 'user', inputText.trim());
+			if (userMessage) {
+				setMessages(prev => [...prev, userMessage]);
+			}
+
+			// Fact-check the user's claim
+			const factCheckResult = await factCheckClaim(inputText.trim());
+
+			// Update user's message with fact-check result
+			if (userMessage && factCheckResult) {
+				await supabase
+					.from('debate_messages')
+					.update({ fact_check_result: factCheckResult })
+					.eq('id', userMessage.id);
+
+				// Update local message
+				setMessages(prev => prev.map(msg =>
+					msg.id === userMessage.id
+						? { ...msg, fact_check_result: factCheckResult }
+						: msg
+				));
+			}
+
+			// Generate AI response
+			const aiResponse = await generateAIDebateResponse(
+				inputText.trim(),
+				debate.topic,
+				steelManLevel,
+				persona.description || persona.name
+			);
+
+			// Save AI message
+			const aiMessage = await saveDebateMessage(debate.id, 'ai', aiResponse);
+			if (aiMessage) {
+				setMessages(prev => [...prev, aiMessage]);
+			}
+
+			// Adjust steel-man level based on debate quality
+			const newSteelManLevel = Math.min(1, Math.max(0, steelManLevel + 0.1));
+			setSteelManLevel(newSteelManLevel);
+			await updateDebateSteelManLevel(debate.id, newSteelManLevel);
+
+			setInputText('');
+
+			// Scroll to bottom
+			setTimeout(() => {
+				scrollViewRef.current?.scrollToEnd({ animated: true });
+			}, 100);
+
+		} catch (error) {
+			console.error('Error sending message:', error);
+			Alert.alert('Error', 'Failed to send message');
+		} finally {
+			setSending(false);
+		}
+	};
+
+	const handleEndDebate = async () => {
+		if (!debate) return;
+
+		Alert.alert(
+			'End Debate',
+			'Are you sure you want to end this debate?',
+			[
+				{ text: 'Cancel', style: 'cancel' },
+				{
+					text: 'End Debate',
+					onPress: async () => {
+						await endDebate(debate.id);
+						navigation.goBack();
+					}
+				}
+			]
+		);
+	};
+
+	if (loading) {
+		return (
+			<View style={styles.loadingContainer}>
+				<ActivityIndicator size="large" color="#BB86FC" />
+				<Text style={styles.loadingText}>Initializing debate...</Text>
+			</View>
+		);
+	}
 
 	return (
 		<View style={styles.container}>
@@ -19,12 +188,12 @@ const DebateScreen = () => {
 						<IconButton icon="arrow-left" iconColor="#fff" size={24} />
 					</TouchableOpacity>
 					<View style={styles.headerTitleContainer}>
-						<Text style={styles.headerTitle}>DEBATE</Text>
+						<Text style={styles.headerTitle}>{debate?.topic || 'DEBATE'}</Text>
 						<View style={styles.strengthBadge}>
-							<Text style={styles.strengthText}>Strength: 85</Text>
+							<Text style={styles.strengthText}>Steel-man: {Math.round(steelManLevel * 100)}%</Text>
 						</View>
 					</View>
-					<IconButton icon="dots-vertical" iconColor="#fff" size={24} />
+					<IconButton icon="stop-circle" iconColor="#fff" size={24} onPress={handleEndDebate} />
 				</View>
 
 				<View style={styles.healthBarContainer}>
@@ -37,14 +206,73 @@ const DebateScreen = () => {
 			</View>
 
 			<View style={styles.chatContainer}>
-				<ScrollView contentContainerStyle={styles.chatContent}>
-					<View style={[styles.messageRow, styles.aiRow]}>
-						<View style={[styles.avatar, { width: 32, height: 32, borderRadius: 16 }]} />
-						<View style={[styles.messageBubble, styles.aiBubble]}>
-							<Text style={styles.senderName}>AI OPPONENT</Text>
-							<Text style={styles.messageText}>I believe that artificial intelligence will eventually surpass human intelligence in all cognitive tasks.</Text>
+				<ScrollView
+					ref={scrollViewRef}
+					contentContainerStyle={styles.chatContent}
+				>
+					{messages.length === 0 ? (
+						<View style={styles.emptyState}>
+							<Text style={styles.emptyStateText}>Start the debate by sending your first argument!</Text>
 						</View>
-					</View>
+					) : (
+						messages.map((message) => (
+							<View
+								key={message.id}
+								style={[
+									styles.messageRow,
+									message.sender_type === 'user' ? styles.userRow : styles.aiRow
+								]}
+							>
+								{message.sender_type === 'ai' && (
+									<Avatar.Image
+										size={32}
+										source={{ uri: persona?.avatar_url || 'https://i.pravatar.cc/150?img=60' }}
+										style={styles.avatar}
+									/>
+								)}
+								<View style={[
+									styles.messageBubble,
+									message.sender_type === 'user' ? styles.userBubble : styles.aiBubble
+								]}>
+									<Text style={styles.senderName}>
+										{message.sender_type === 'user' ? 'YOU' : persona?.name?.toUpperCase() || 'AI OPPONENT'}
+									</Text>
+									<Text style={styles.messageText}>{message.content}</Text>
+
+									{/* Fact-check result for user messages */}
+									{message.sender_type === 'user' && message.fact_check_result && (
+										<View style={styles.factCheckContainer}>
+											<IconButton
+												icon={message.fact_check_result.verified ? "check-circle" : "alert-circle"}
+												size={16}
+												iconColor={message.fact_check_result.verified ? "#4CAF50" : "#FF5252"}
+											/>
+											<Text style={[
+												styles.factCheckText,
+												{ color: message.fact_check_result.verified ? "#4CAF50" : "#FF5252" }
+											]}>
+												{message.fact_check_result.verified ? "Fact-checked ✓" : "Needs verification"}
+											</Text>
+										</View>
+									)}
+								</View>
+								{message.sender_type === 'user' && (
+									<Avatar.Image
+										size={32}
+										source={{ uri: user?.user_metadata?.avatar_url || 'https://i.pravatar.cc/150?img=1' }}
+										style={styles.avatar}
+									/>
+								)}
+							</View>
+						))
+					)}
+
+					{sending && (
+						<View style={styles.loadingContainer}>
+							<ActivityIndicator size="small" color="#BB86FC" />
+							<Text style={styles.loadingText}>AI is thinking...</Text>
+						</View>
+					)}
 				</ScrollView>
 			</View>
 
@@ -61,9 +289,21 @@ const DebateScreen = () => {
 							activeUnderlineColor="transparent"
 							textColor="#fff"
 						/>
-						<TouchableOpacity style={styles.sendButton}>
-							<LinearGradient colors={['#BB86FC', '#3700B3']} style={styles.sendGradient}>
-								<IconButton icon="send" iconColor="#fff" size={20} />
+						<TouchableOpacity
+							style={styles.sendButton}
+							onPress={handleSendMessage}
+							disabled={sending || !inputText.trim()}
+						>
+							<LinearGradient
+								colors={sending || !inputText.trim() ? ['#666', '#444'] : ['#BB86FC', '#3700B3']}
+								style={styles.sendGradient}
+							>
+								<IconButton
+									icon="send"
+									iconColor="#fff"
+									size={20}
+									disabled={sending || !inputText.trim()}
+								/>
 							</LinearGradient>
 						</TouchableOpacity>
 					</View>
@@ -252,5 +492,29 @@ const styles = StyleSheet.create({
 		borderRadius: 20,
 		justifyContent: 'center',
 		alignItems: 'center',
+	},
+	loadingContainer: {
+		flexDirection: 'row',
+		alignItems: 'center',
+		marginLeft: 50,
+		marginBottom: 20,
+	},
+	loadingText: {
+		color: '#888',
+		fontSize: 12,
+		marginLeft: 10,
+		fontStyle: 'italic',
+	},
+	emptyState: {
+		flex: 1,
+		justifyContent: 'center',
+		alignItems: 'center',
+		padding: 40,
+	},
+	emptyStateText: {
+		color: '#666',
+		fontSize: 16,
+		textAlign: 'center',
+		fontStyle: 'italic',
 	},
 });

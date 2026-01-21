@@ -1,41 +1,46 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { View, StyleSheet, ScrollView, Dimensions } from 'react-native';
-import { Text, Surface, IconButton, Button, ProgressBar } from 'react-native-paper';
+import { Text, Surface, IconButton, Button, ProgressBar, ActivityIndicator } from 'react-native-paper';
 import { useNavigation } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-
-const BIASES = [
-	{
-		id: '1',
-		name: 'Confirmation Bias',
-		score: 0.8,
-		color: '#FF5252',
-		desc: 'Tendency to favor information that confirms your existing beliefs.',
-		example: 'In the "Nuclear Energy" debate, you dismissed 3 sources citing safety data.'
-	},
-	{
-		id: '2',
-		name: 'Ad Hominem',
-		score: 0.3,
-		color: '#4CAF50',
-		desc: 'Attacking the opponent rather than their argument.',
-		example: 'Low frequency. Good job focusing on the topic!'
-	},
-	{
-		id: '3',
-		name: 'Sunk Cost Fallacy',
-		score: 0.6,
-		color: '#FFC107',
-		desc: 'Continuing a behavior because of previously invested resources.',
-		example: 'You held onto the "Inflation" point despite counter-evidence.'
-	},
-];
+import { useAuth } from '../context/AuthContext';
+import { getUserBiasStats } from '../services/cognitiveBiasService';
 
 export default function BlindSpotScreen() {
 	const navigation = useNavigation();
 	const insets = useSafeAreaInsets();
+	const { user } = useAuth();
+	const [biasStats, setBiasStats] = useState<any>(null);
+	const [loading, setLoading] = useState(true);
+
+	useEffect(() => {
+		if (user) {
+			fetchBiasStats();
+		}
+	}, [user]);
+
+	const fetchBiasStats = async () => {
+		try {
+			setLoading(true);
+			const stats = await getUserBiasStats(user!.id);
+			setBiasStats(stats);
+		} catch (error) {
+			console.error('Error fetching bias stats:', error);
+		} finally {
+			setLoading(false);
+		}
+	};
+
+	if (loading) {
+		return (
+			<View style={styles.loadingContainer}>
+				<ActivityIndicator size="large" color="#BB86FC" />
+				<Text style={styles.loadingText}>Scanning your debate history...</Text>
+			</View>
+		);
+	}
 
 	return (
 		<View style={styles.container}>
@@ -64,7 +69,7 @@ export default function BlindSpotScreen() {
 								<Text style={styles.radarLabel}>Scanning Debate History...</Text>
 							</View>
 							<View style={styles.radarStats}>
-								<Text style={styles.radarStatValue}>3</Text>
+								<Text style={styles.radarStatValue}>{biasStats?.activeBiases || 0}</Text>
 								<Text style={styles.radarStatLabel}>Active Biases Detected</Text>
 							</View>
 						</LinearGradient>
@@ -72,48 +77,61 @@ export default function BlindSpotScreen() {
 
 					<Text style={styles.sectionTitle}>Detected Patterns</Text>
 
-					{BIASES.map((bias) => (
-						<Surface key={bias.id} style={styles.biasCard} elevation={2}>
-							<View style={styles.biasHeader}>
-								<View style={styles.biasTitleRow}>
-									<MaterialCommunityIcons
-										name={bias.score > 0.5 ? "alert-circle-outline" : "check-circle-outline"}
-										size={24}
-										color={bias.color}
-									/>
-									<Text style={styles.biasName}>{bias.name}</Text>
+					{biasStats?.biasGroups?.length > 0 ? (
+						biasStats.biasGroups.map((bias: any) => (
+							<Surface key={bias.type} style={styles.biasCard} elevation={2}>
+								<View style={styles.biasHeader}>
+									<View style={styles.biasTitleRow}>
+										<MaterialCommunityIcons
+											name={bias.averageScore > 0.5 ? "alert-circle-outline" : "check-circle-outline"}
+											size={24}
+											color={bias.color}
+										/>
+										<Text style={styles.biasName}>{bias.name}</Text>
+									</View>
+									<Text style={[styles.biasScore, { color: bias.color }]}>
+										{(bias.averageScore * 100).toFixed(0)}%
+									</Text>
 								</View>
-								<Text style={[styles.biasScore, { color: bias.color }]}>
-									{(bias.score * 100).toFixed(0)}%
-								</Text>
-							</View>
 
-							<ProgressBar
-								progress={bias.score}
-								color={bias.color}
-								style={styles.progressBar}
-							/>
+								<ProgressBar
+									progress={bias.averageScore}
+									color={bias.color}
+									style={styles.progressBar}
+								/>
 
-							<Text style={styles.biasDesc}>{bias.desc}</Text>
+								<Text style={styles.biasDesc}>{bias.description}</Text>
 
-							<View style={styles.exampleBox}>
-								<Text style={styles.exampleLabel}>RECENT INSTANCE:</Text>
-								<Text style={styles.exampleText}>"{bias.example}"</Text>
-							</View>
+								{bias.recentExample && (
+									<View style={styles.exampleBox}>
+										<Text style={styles.exampleLabel}>RECENT INSTANCE:</Text>
+										<Text style={styles.exampleText}>"{bias.recentExample.text}"</Text>
+										<Text style={styles.exampleDate}>
+											{new Date(bias.recentExample.date).toLocaleDateString()}
+										</Text>
+									</View>
+								)}
 
-							{bias.score > 0.5 && (
-								<Button
-									mode="outlined"
-									onPress={() => { }}
-									style={styles.fixButton}
-									textColor={bias.color}
-									icon="dumbbell"
-								>
-									Train to Fix This
-								</Button>
-							)}
+								{bias.averageScore > 0.5 && (
+									<Button
+										mode="outlined"
+										onPress={() => { }}
+										style={styles.fixButton}
+										textColor={bias.color}
+										icon="dumbbell"
+									>
+										Train to Fix This
+									</Button>
+								)}
+							</Surface>
+						))
+					) : (
+						<Surface style={styles.biasCard} elevation={2}>
+							<Text style={styles.noBiasesText}>
+								No cognitive biases detected yet. Participate in more debates to see your patterns!
+							</Text>
 						</Surface>
-					))}
+					)}
 
 				</ScrollView>
 			</LinearGradient>
@@ -249,5 +267,29 @@ const styles = StyleSheet.create({
 	},
 	fixButton: {
 		borderColor: '#333',
+	},
+	loadingContainer: {
+		flex: 1,
+		justifyContent: 'center',
+		alignItems: 'center',
+		backgroundColor: '#0f0c29',
+	},
+	loadingText: {
+		color: '#BB86FC',
+		marginTop: 10,
+		fontSize: 16,
+	},
+	noBiasesText: {
+		color: '#666',
+		fontSize: 14,
+		textAlign: 'center',
+		fontStyle: 'italic',
+		padding: 20,
+	},
+	exampleDate: {
+		color: '#888',
+		fontSize: 10,
+		marginTop: 4,
+		fontStyle: 'italic',
 	},
 });

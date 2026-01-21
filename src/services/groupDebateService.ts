@@ -12,6 +12,7 @@ export interface GroupDebate {
 	category?: string;
 	ends_at?: string;
 	created_at: string;
+	participant_count?: number;
 }
 
 export interface GroupDebateParticipant {
@@ -39,19 +40,22 @@ export interface GroupDebateMessage {
 // ============================================================================
 
 export const getActiveGroupDebates = async (
-	includeAnonymous = true
+	includeAnonymous = true,
+	userId?: string
 ): Promise<GroupDebate[]> => {
 	let query = supabase
 		.from('group_debates')
 		.select('*')
-		.eq('status', 'active')
-		.order('created_at', { ascending: false });
+		.eq('status', 'active');
+
+	// Temporarily disabled community filtering until database is updated
+	// TODO: Re-enable community filtering once community_id column is added to group_debates table
 
 	if (!includeAnonymous) {
 		query = query.eq('is_anonymous', false);
 	}
 
-	const { data, error } = await query;
+	const { data, error } = await query.order('created_at', { ascending: false });
 
 	if (error) {
 		console.error('Error fetching group debates:', error);
@@ -69,7 +73,7 @@ export const getFeaturedDebate = async (): Promise<GroupDebate | null> => {
 		.eq('is_featured', true)
 		.order('created_at', { ascending: false })
 		.limit(1)
-		.single();
+		.maybeSingle();
 
 	if (error) {
 		console.error('Error fetching featured debate:', error);
@@ -114,6 +118,52 @@ export const createGroupDebate = async (
 	return data;
 };
 
+export const updateGroupDebate = async (
+	debateId: string,
+	updates: {
+		topic?: string;
+		status?: GroupDebate['status'];
+		maxParticipants?: number;
+		isAnonymous?: boolean;
+		isFeatured?: boolean;
+		intensityLevel?: GroupDebate['intensity_level'];
+		category?: string;
+		endsAt?: string;
+	}
+): Promise<GroupDebate | null> => {
+	// Build update object with proper null checks
+	const updateData: any = {};
+
+	if (updates.topic !== undefined) updateData.topic = updates.topic;
+	if (updates.status !== undefined) updateData.status = updates.status;
+	if (updates.maxParticipants !== undefined) updateData.max_participants = updates.maxParticipants;
+	if (updates.isAnonymous !== undefined) updateData.is_anonymous = updates.isAnonymous;
+	if (updates.isFeatured !== undefined) updateData.is_featured = updates.isFeatured;
+	if (updates.intensityLevel !== undefined) updateData.intensity_level = updates.intensityLevel;
+	if (updates.category !== undefined) updateData.category = updates.category;
+	if (updates.endsAt !== undefined) updateData.ends_at = updates.endsAt;
+
+	// Check if there's anything to update
+	if (Object.keys(updateData).length === 0) {
+		console.warn('No fields to update in group debate');
+		return null;
+	}
+
+	const { data, error } = await supabase
+		.from('group_debates')
+		.update(updateData)
+		.eq('id', debateId)
+		.select()
+		.single();
+
+	if (error) {
+		console.error('Error updating group debate:', error);
+		return null;
+	}
+
+	return data;
+};
+
 export const getDebateParticipantCount = async (debateId: string): Promise<number> => {
 	const { count, error } = await supabase
 		.from('group_debate_participants')
@@ -133,18 +183,44 @@ export const getDebateParticipantCount = async (debateId: string): Promise<numbe
 // PARTICIPANT OPERATIONS
 // ============================================================================
 
-export const joinGroupDebate = async (
-	userId: string,
+export const isUserParticipatingInDebate = async (
 	debateId: string,
+	userId: string
+): Promise<boolean> => {
+	const { data, error } = await supabase
+		.from('group_debate_participants')
+		.select('id')
+		.eq('debate_id', debateId)
+		.eq('user_id', userId)
+		.is('left_at', null)
+		.maybeSingle();
+
+	if (error) {
+		console.error('Error checking participation:', error);
+		return false;
+	}
+
+	return !!data;
+};
+
+export const joinGroupDebate = async (
+	debateId: string,
+	userId: string,
 	anonymousMaskId?: string
 ): Promise<boolean> => {
 	const { error } = await supabase
 		.from('group_debate_participants')
-		.insert({
-			debate_id: debateId,
-			user_id: userId,
-			anonymous_mask_id: anonymousMaskId,
-		});
+		.upsert(
+			{
+				debate_id: debateId,
+				user_id: userId,
+				anonymous_mask_id: anonymousMaskId,
+				left_at: null, // Ensure they're marked as active
+			},
+			{
+				onConflict: 'debate_id,user_id',
+			}
+		);
 
 	if (error) {
 		console.error('Error joining group debate:', error);
@@ -155,8 +231,8 @@ export const joinGroupDebate = async (
 };
 
 export const leaveGroupDebate = async (
-	userId: string,
-	debateId: string
+	debateId: string,
+	userId: string
 ): Promise<boolean> => {
 	const { error } = await supabase
 		.from('group_debate_participants')
@@ -176,7 +252,7 @@ export const leaveGroupDebate = async (
 // MESSAGE OPERATIONS
 // ============================================================================
 
-export const getDebateMessages = async (
+export const getGroupDebateMessages = async (
 	debateId: string,
 	limit = 50
 ): Promise<GroupDebateMessage[]> => {
@@ -195,14 +271,25 @@ export const getDebateMessages = async (
 	return data || [];
 };
 
-export const sendDebateMessage = async (
+export const sendGroupDebateMessage = async (
 	debateId: string,
 	userId: string,
-	senderName: string,
 	content: string,
 	senderType: GroupDebateMessage['sender_type'] = 'user',
 	replyToId?: string
 ): Promise<GroupDebateMessage | null> => {
+	// Get user's display name
+	let senderName = 'User';
+	if (senderType === 'user' && userId) {
+		const { data: profile } = await supabase
+			.from('profiles')
+			.select('username')
+			.eq('id', userId)
+			.single();
+
+		senderName = profile?.username || 'User';
+	}
+
 	const { data, error } = await supabase
 		.from('group_debate_messages')
 		.insert({
@@ -228,7 +315,7 @@ export const sendDebateMessage = async (
 // REALTIME SUBSCRIPTIONS
 // ============================================================================
 
-export const subscribeToDebateMessages = (
+export const subscribeToGroupDebateMessages = (
 	debateId: string,
 	onMessage: (message: GroupDebateMessage) => void
 ) => {

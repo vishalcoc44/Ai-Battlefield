@@ -34,12 +34,16 @@ export const getUserPredictions = async (userId: string): Promise<Prediction[]> 
 	return data || [];
 };
 
-export const getOpenPredictions = async (): Promise<Prediction[]> => {
-	const { data, error } = await supabase
+export const getOpenPredictions = async (userId?: string): Promise<Prediction[]> => {
+	let query = supabase
 		.from('predictions')
 		.select('*')
-		.eq('resolved', false)
-		.order('deadline', { ascending: true });
+		.eq('resolved', false);
+
+	// Temporarily disabled community filtering until database is updated
+	// TODO: Re-enable community filtering once community_id column is added to predictions table
+
+	const { data, error } = await query.order('deadline', { ascending: true });
 
 	if (error) {
 		console.error('Error fetching open predictions:', error);

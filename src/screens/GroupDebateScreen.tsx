@@ -1,67 +1,127 @@
-import React, { useState, useRef } from 'react';
-import { View, StyleSheet, ScrollView, KeyboardAvoidingView, Platform, TouchableOpacity } from 'react-native';
-import { Text, TextInput, IconButton, Surface, Avatar, Chip } from 'react-native-paper';
+import React, { useState, useRef, useEffect } from 'react';
+import { View, StyleSheet, ScrollView, KeyboardAvoidingView, Platform, TouchableOpacity, ActivityIndicator } from 'react-native';
+import { Text, TextInput, IconButton, Surface, Avatar } from 'react-native-paper';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-
-type Message = {
-	id: string;
-	text: string;
-	sender: string;
-	senderType: 'user' | 'ai' | 'other_user';
-	avatar?: string;
-	timestamp: string;
-};
-
-const MOCK_MESSAGES: Message[] = [
-	{
-		id: '1',
-		text: 'Universal Basic Income reduces the incentive to work.',
-		sender: 'Thomas Sowell AI',
-		senderType: 'ai',
-		avatar: 'https://i.pravatar.cc/150?img=11',
-		timestamp: '10:02 AM'
-	},
-	{
-		id: '2',
-		text: 'Actually, studies show people use the time for education.',
-		sender: 'Sarah (User)',
-		senderType: 'other_user',
-		avatar: 'https://i.pravatar.cc/150?img=5',
-		timestamp: '10:03 AM'
-	},
-	{
-		id: '3',
-		text: 'But where does the funding come from without inflation?',
-		sender: 'Elon Musk AI',
-		senderType: 'ai',
-		avatar: 'https://i.pravatar.cc/150?img=3',
-		timestamp: '10:03 AM'
-	}
-];
+import { useAuth } from '../context/AuthContext';
+import { supabase } from '../lib/supabase';
+import {
+	getGroupDebateMessages,
+	sendGroupDebateMessage,
+	joinGroupDebate,
+	leaveGroupDebate,
+	subscribeToGroupDebateMessages,
+	updateGroupDebate,
+	type GroupDebateMessage,
+	type GroupDebate
+} from '../services/groupDebateService';
 
 export default function GroupDebateScreen() {
 	const navigation = useNavigation();
 	const insets = useSafeAreaInsets();
-	const route = useRoute();
-	const [messages, setMessages] = useState<Message[]>(MOCK_MESSAGES);
+	const route = useRoute<any>();
+	const { session } = useAuth();
+	const { debateId } = route.params || {};
+
+	const [messages, setMessages] = useState<GroupDebateMessage[]>([]);
 	const [inputText, setInputText] = useState('');
+	const [loading, setLoading] = useState(true);
+	const [participantCount, setParticipantCount] = useState(0);
+	const [debate, setDebate] = useState<GroupDebate | null>(null);
+	const [editingTopic, setEditingTopic] = useState(false);
+	const [newTopic, setNewTopic] = useState('');
 	const scrollViewRef = useRef<ScrollView>(null);
 
-	const sendMessage = () => {
-		if (!inputText.trim()) return;
-		const newMsg: Message = {
-			id: Date.now().toString(),
-			text: inputText,
-			sender: 'You',
-			senderType: 'user',
-			timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+	useEffect(() => {
+		if (!debateId || !session?.user?.id) return;
+
+		loadDebate();
+		loadMessages();
+		joinDebate();
+
+		// Subscribe to real-time messages
+		const subscription = subscribeToGroupDebateMessages(debateId, (newMessage) => {
+			setMessages((prev) => [...prev, newMessage]);
+		});
+
+		return () => {
+			subscription.unsubscribe();
+			leaveDebate();
 		};
-		setMessages([...messages, newMsg]);
+	}, [debateId, session]);
+
+	const loadDebate = async () => {
+		const { data, error } = await supabase
+			.from('group_debates')
+			.select('*')
+			.eq('id', debateId)
+			.single();
+
+		if (error) {
+			console.error('Error loading debate:', error);
+			return;
+		}
+
+		setDebate(data);
+		setNewTopic(data.topic);
+	};
+
+	const loadMessages = async () => {
+		setLoading(true);
+		const msgs = await getGroupDebateMessages(debateId);
+		setMessages(msgs);
+		setLoading(false);
+	};
+
+	const joinDebate = async () => {
+		if (!session?.user?.id) return;
+		await joinGroupDebate(debateId, session.user.id);
+	};
+
+	const leaveDebate = async () => {
+		if (!session?.user?.id) return;
+		await leaveGroupDebate(debateId, session.user.id);
+	};
+
+	const saveTopic = async () => {
+		if (!newTopic.trim() || !debate) return;
+
+		const updatedDebate = await updateGroupDebate(debateId, { topic: newTopic.trim() });
+		if (updatedDebate) {
+			setDebate(updatedDebate);
+			setEditingTopic(false);
+		}
+	};
+
+	const cancelEdit = () => {
+		setNewTopic(debate?.topic || '');
+		setEditingTopic(false);
+	};
+
+	const sendMessage = async () => {
+		if (!inputText.trim() || !session?.user?.id) return;
+
+		await sendGroupDebateMessage(debateId, session.user.id, inputText);
 		setInputText('');
 	};
+
+	const getSenderColor = (senderType: string) => {
+		if (senderType === 'ai') return '#BB86FC';
+		if (senderType === 'user') return '#FF5252';
+		return '#4CAF50';
+	};
+
+	if (loading) {
+		return (
+			<View style={[styles.container, styles.centered]}>
+				<LinearGradient colors={['#0f0c29', '#1a1a2e', '#16213e']} style={styles.background}>
+					<ActivityIndicator size="large" color="#BB86FC" />
+				</LinearGradient>
+			</View>
+		);
+	}
 
 	return (
 		<View style={styles.container}>
@@ -74,19 +134,52 @@ export default function GroupDebateScreen() {
 					<View style={styles.headerTop}>
 						<IconButton icon="arrow-left" iconColor="#fff" onPress={() => navigation.goBack()} />
 						<View style={styles.headerTitleContainer}>
-							<Text style={styles.headerTitle}>UBI DEBATE RING</Text>
-							<Text style={styles.participantCount}>8 Active • 12 Spectating</Text>
+							<Text style={styles.headerTitle}>DEBATE RING</Text>
+							<Text style={styles.participantCount}>{participantCount} Active</Text>
 						</View>
 						<IconButton icon="information-outline" iconColor="#fff" onPress={() => { }} />
 					</View>
 
 					{/* Topic Banner */}
 					<View style={styles.topicBanner}>
-						<Text style={styles.topicText}>Topic: Is UBI Necessary?</Text>
-						<View style={styles.timerContainer}>
-							<MaterialCommunityIcons name="clock-outline" size={14} color="#FF5252" />
-							<Text style={styles.timerText}>04:20 left</Text>
-						</View>
+						{editingTopic ? (
+							<View style={styles.topicEditContainer}>
+								<TextInput
+									value={newTopic}
+									onChangeText={setNewTopic}
+									style={styles.topicInput}
+									placeholder="Enter debate topic..."
+									placeholderTextColor="#666"
+									maxLength={100}
+								/>
+								<View style={styles.topicEditButtons}>
+									<IconButton
+										icon="check"
+										size={20}
+										iconColor="#4CAF50"
+										onPress={saveTopic}
+									/>
+									<IconButton
+										icon="close"
+										size={20}
+										iconColor="#F44336"
+										onPress={cancelEdit}
+									/>
+								</View>
+							</View>
+						) : (
+							<View style={styles.topicDisplayContainer}>
+								<Text style={styles.topicText}>Topic: {debate?.topic || 'Loading...'}</Text>
+								{debate?.created_by === session?.user?.id && (
+									<IconButton
+										icon="pencil"
+										size={20}
+										iconColor="#BB86FC"
+										onPress={() => setEditingTopic(true)}
+									/>
+								)}
+							</View>
+						)}
 					</View>
 				</Surface>
 
@@ -97,38 +190,43 @@ export default function GroupDebateScreen() {
 					contentContainerStyle={styles.chatContent}
 					onContentSizeChange={() => scrollViewRef.current?.scrollToEnd({ animated: true })}
 				>
-					{messages.map((msg) => (
-						<View key={msg.id} style={[
-							styles.messageRow,
-							msg.senderType === 'user' ? styles.userRow : styles.otherRow
-						]}>
-							{msg.senderType !== 'user' && (
-								<Avatar.Image size={32} source={{ uri: msg.avatar }} style={styles.avatar} />
-							)}
-
-							<View style={[
-								styles.messageBubble,
-								msg.senderType === 'user' ? styles.userBubble :
-									msg.senderType === 'ai' ? styles.aiBubble : styles.otherUserBubble
+					{messages.map((msg) => {
+						const isCurrentUser = msg.user_id === session?.user?.id;
+						return (
+							<View key={msg.id} style={[
+								styles.messageRow,
+								isCurrentUser ? styles.userRow : styles.otherRow
 							]}>
-								{msg.senderType !== 'user' && (
-									<Text style={[
-										styles.senderName,
-										{ color: msg.senderType === 'ai' ? '#BB86FC' : '#4CAF50' }
-									]}>
-										{msg.sender}
-									</Text>
+								{!isCurrentUser && (
+									<Avatar.Text size={32} label={msg.sender_type === 'ai' ? 'AI' : 'U'} style={styles.avatar} />
 								)}
-								<Text style={styles.messageText}>{msg.text}</Text>
-								<Text style={styles.timestamp}>{msg.timestamp}</Text>
+
+								<View style={[
+									styles.messageBubble,
+									isCurrentUser ? styles.userBubble :
+										msg.sender_type === 'ai' ? styles.aiBubble : styles.otherUserBubble
+								]}>
+									{!isCurrentUser && (
+										<Text style={[
+											styles.senderName,
+											{ color: getSenderColor(msg.sender_type) }
+										]}>
+											{msg.sender_type === 'ai' ? 'AI Participant' : (msg.sender_name || 'User')}
+										</Text>
+									)}
+									<Text style={styles.messageText}>{msg.content}</Text>
+									<Text style={styles.timestamp}>
+										{new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+									</Text>
+								</View>
 							</View>
-						</View>
-					))}
+						);
+					})}
 				</ScrollView>
 
 				{/* Input Area */}
 				<KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-					<Surface style={[styles.inputContainer, { paddingBottom: Math.max(insets.bottom, 20) }]} elevation={8}>
+					<Surface style={[styles.inputContainer, { paddingBottom: Math.max(insets.bottom, 20) }]} elevation={5}>
 						<View style={styles.inputWrapper}>
 							<TextInput
 								mode="flat"
@@ -165,6 +263,10 @@ const styles = StyleSheet.create({
 	background: {
 		flex: 1,
 	},
+	centered: {
+		justifyContent: 'center',
+		alignItems: 'center',
+	},
 	header: {
 		backgroundColor: '#1e1e2e',
 		paddingBottom: 10,
@@ -199,20 +301,37 @@ const styles = StyleSheet.create({
 		paddingVertical: 8,
 		marginTop: 5,
 	},
+	topicDisplayContainer: {
+		flexDirection: 'row',
+		alignItems: 'center',
+		flex: 1,
+	},
+	topicEditContainer: {
+		flexDirection: 'row',
+		alignItems: 'center',
+		flex: 1,
+	},
 	topicText: {
 		color: '#fff',
 		fontSize: 12,
 		fontWeight: '600',
+		flex: 1,
 	},
-	timerContainer: {
-		flexDirection: 'row',
-		alignItems: 'center',
-	},
-	timerText: {
-		color: '#FF5252',
+	topicInput: {
+		flex: 1,
+		backgroundColor: 'rgba(255, 255, 255, 0.1)',
+		borderRadius: 4,
+		paddingHorizontal: 8,
+		paddingVertical: 4,
+		color: '#fff',
 		fontSize: 12,
-		fontWeight: 'bold',
-		marginLeft: 4,
+		fontWeight: '600',
+		borderWidth: 1,
+		borderColor: '#BB86FC',
+	},
+	topicEditButtons: {
+		flexDirection: 'row',
+		marginLeft: 8,
 	},
 	chatContainer: {
 		flex: 1,

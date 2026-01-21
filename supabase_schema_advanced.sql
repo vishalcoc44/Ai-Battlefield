@@ -198,6 +198,7 @@ CREATE INDEX IF NOT EXISTS idx_debate_messages_debate ON debate_messages(debate_
 
 CREATE TABLE IF NOT EXISTS group_debates (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  community_id UUID REFERENCES communities(id) ON DELETE CASCADE, -- NULL for global debates
   topic TEXT NOT NULL,
   created_by UUID REFERENCES profiles(id) ON DELETE SET NULL,
   status TEXT CHECK (status IN ('active', 'closed', 'archived')) DEFAULT 'active',
@@ -239,6 +240,51 @@ CREATE TABLE IF NOT EXISTS group_debate_messages (
 );
 
 CREATE INDEX IF NOT EXISTS idx_group_debate_messages_debate ON group_debate_messages(debate_id, created_at DESC);
+
+-- ============================================================================
+-- COMMUNITIES
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS communities (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  name TEXT NOT NULL,
+  description TEXT,
+  creator_id UUID REFERENCES profiles(id) ON DELETE CASCADE,
+  is_locked BOOLEAN DEFAULT FALSE,
+  invite_code TEXT UNIQUE,
+  max_members INTEGER DEFAULT 100,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_communities_creator ON communities(creator_id);
+CREATE INDEX IF NOT EXISTS idx_communities_locked ON communities(is_locked);
+
+CREATE TABLE IF NOT EXISTS community_members (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  community_id UUID REFERENCES communities(id) ON DELETE CASCADE,
+  user_id UUID REFERENCES profiles(id) ON DELETE CASCADE,
+  role TEXT CHECK (role IN ('creator', 'admin', 'member')) DEFAULT 'member',
+  joined_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  UNIQUE(community_id, user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_community_members_community ON community_members(community_id);
+CREATE INDEX IF NOT EXISTS idx_community_members_user ON community_members(user_id);
+
+CREATE TABLE IF NOT EXISTS community_invites (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  community_id UUID REFERENCES communities(id) ON DELETE CASCADE,
+  invite_code TEXT UNIQUE NOT NULL,
+  created_by UUID REFERENCES profiles(id) ON DELETE CASCADE,
+  expires_at TIMESTAMP WITH TIME ZONE,
+  max_uses INTEGER,
+  current_uses INTEGER DEFAULT 0,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_community_invites_code ON community_invites(invite_code);
+CREATE INDEX IF NOT EXISTS idx_community_invites_community ON community_invites(community_id);
 
 -- ============================================================================
 -- ANONYMOUS MODE (THE VOID)
@@ -318,6 +364,7 @@ CREATE TABLE IF NOT EXISTS deescalation_responses (
 CREATE TABLE IF NOT EXISTS predictions (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   user_id UUID REFERENCES profiles(id) ON DELETE CASCADE,
+  community_id UUID REFERENCES communities(id) ON DELETE CASCADE, -- NULL for global predictions
   question TEXT NOT NULL,
   category TEXT NOT NULL, -- 'Technology', 'Politics', 'Space', etc.
   probability FLOAT CHECK (probability >= 0 AND probability <= 1),
@@ -374,6 +421,7 @@ CREATE POLICY "Users can create messages in their debates" ON debate_messages FO
 ALTER TABLE group_debates ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "Anyone can view active group debates" ON group_debates FOR SELECT USING (status = 'active');
 CREATE POLICY "Authenticated users can create group debates" ON group_debates FOR INSERT WITH CHECK (auth.uid() IS NOT NULL);
+CREATE POLICY "Debate creators can update their own debates" ON group_debates FOR UPDATE USING (auth.uid() = created_by);
 
 ALTER TABLE group_debate_messages ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "Anyone can view group debate messages" ON group_debate_messages FOR SELECT USING (TRUE);
@@ -387,9 +435,51 @@ CREATE POLICY "Users can view their own biases" ON cognitive_biases FOR SELECT U
 ALTER TABLE deescalation_sessions ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "Users can manage their own sessions" ON deescalation_sessions FOR ALL USING (auth.uid() = user_id);
 
+-- Communities
+ALTER TABLE communities ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Anyone can view unlocked communities" ON communities FOR SELECT USING (is_locked = FALSE);
+CREATE POLICY "Community members can view their communities" ON communities FOR SELECT USING (
+  id IN (SELECT community_id FROM community_members WHERE user_id = auth.uid())
+);
+CREATE POLICY "Authenticated users can create communities" ON communities FOR INSERT WITH CHECK (auth.uid() IS NOT NULL);
+CREATE POLICY "Community creators and admins can update communities" ON communities FOR UPDATE USING (
+  creator_id = auth.uid() OR
+  id IN (SELECT community_id FROM community_members WHERE user_id = auth.uid() AND role IN ('creator', 'admin'))
+);
+
+ALTER TABLE community_members ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Community members can view member lists" ON community_members FOR SELECT USING (
+  community_id IN (SELECT community_id FROM community_members WHERE user_id = auth.uid())
+);
+CREATE POLICY "Users can join unlocked communities" ON community_members FOR INSERT WITH CHECK (
+  community_id IN (SELECT id FROM communities WHERE is_locked = FALSE) OR
+  community_id IN (SELECT community_id FROM community_invites WHERE invite_code = 'valid_code_here' AND expires_at > NOW())
+);
+CREATE POLICY "Community creators and admins can manage members" ON community_members FOR ALL USING (
+  community_id IN (
+    SELECT community_id FROM community_members
+    WHERE user_id = auth.uid() AND role IN ('creator', 'admin')
+  )
+);
+
+ALTER TABLE community_invites ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Community members can view invites" ON community_invites FOR SELECT USING (
+  community_id IN (SELECT community_id FROM community_members WHERE user_id = auth.uid())
+);
+CREATE POLICY "Community creators and admins can manage invites" ON community_invites FOR ALL USING (
+  community_id IN (
+    SELECT community_id FROM community_members
+    WHERE user_id = auth.uid() AND role IN ('creator', 'admin')
+  )
+);
+
 -- Predictions
 ALTER TABLE predictions ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "Users can view their own predictions" ON predictions FOR SELECT USING (auth.uid() = user_id);
+CREATE POLICY "Users can view community predictions" ON predictions FOR SELECT USING (
+  community_id IS NULL OR
+  community_id IN (SELECT community_id FROM community_members WHERE user_id = auth.uid())
+);
 CREATE POLICY "Users can create predictions" ON predictions FOR INSERT WITH CHECK (auth.uid() = user_id);
 
 -- ============================================================================

@@ -1,33 +1,49 @@
-import React from 'react';
-import { View, StyleSheet, ScrollView, TouchableOpacity, ImageBackground } from 'react-native';
-import { Text, Surface, IconButton, Avatar, Chip, Button } from 'react-native-paper';
+import React, { useEffect, useState } from 'react';
+import { View, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator } from 'react-native';
+import { Text, Surface, IconButton, Button } from 'react-native-paper';
 import { useNavigation } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-
-const ACTIVE_DEBATES = [
-	{
-		id: '1',
-		topic: 'UBI is necessary',
-		participants: 8,
-		timeLeft: '4m',
-		status: 'LIVE',
-		color: '#FF5252',
-	},
-	{
-		id: '2',
-		topic: 'AI Art is Art',
-		participants: 12,
-		timeLeft: '12m',
-		status: 'HEATED',
-		color: '#BB86FC',
-	},
-];
+import { useAuth } from '../context/AuthContext';
+import { getActiveGroupDebates, getFeaturedDebate, createGroupDebate, type GroupDebate } from '../services/groupDebateService';
 
 export default function GroupDebateLobbyScreen() {
 	const navigation = useNavigation<any>();
 	const insets = useSafeAreaInsets();
+	const { session } = useAuth();
+	const [debates, setDebates] = useState<GroupDebate[]>([]);
+	const [featuredDebate, setFeaturedDebate] = useState<GroupDebate | null>(null);
+	const [loading, setLoading] = useState(true);
+
+	useEffect(() => {
+		loadDebates();
+	}, []);
+
+	const loadDebates = async () => {
+		setLoading(true);
+		const [activeDebates, featured] = await Promise.all([
+			getActiveGroupDebates(true), // Temporarily disabled community filtering
+			getFeaturedDebate(),
+		]);
+		setDebates(activeDebates);
+		setFeaturedDebate(featured);
+		setLoading(false);
+	};
+
+	const handleCreateDebate = async () => {
+		if (!session?.user?.id) return;
+
+		const newDebate = await createGroupDebate(session.user.id, 'New Debate Topic', {
+			isAnonymous: false,
+			isFeatured: false,
+			maxParticipants: 10,
+		});
+
+		if (newDebate) {
+			navigation.navigate('GroupDebate', { debateId: newDebate.id });
+		}
+	};
 
 	return (
 		<View style={styles.container}>
@@ -43,38 +59,39 @@ export default function GroupDebateLobbyScreen() {
 				</View>
 
 				<ScrollView contentContainerStyle={styles.scrollContent}>
-					{/* Hero Section - Daily Debate */}
+					{/* Hero Section - Featured Debate */}
 					<Surface style={styles.heroCard} elevation={4}>
 						<LinearGradient
 							colors={['rgba(255, 82, 82, 0.2)', 'rgba(255, 82, 82, 0.05)']}
 							style={styles.heroGradient}
 						>
 							<View style={styles.heroHeader}>
-								<Text style={styles.heroLabel}>DAILY DEBATE</Text>
+								<Text style={styles.heroLabel}>FEATURED DEBATE</Text>
 								<View style={styles.liveBadge}>
 									<View style={styles.liveDot} />
 									<Text style={styles.liveText}>LIVE</Text>
 								</View>
 							</View>
 
-							<Text style={styles.heroTopic}>"Social Media bans for under 16s"</Text>
+							<Text style={styles.heroTopic}>"{featuredDebate?.topic || 'Loading...'}"</Text>
 
 							<View style={styles.heroStats}>
 								<View style={styles.statItem}>
 									<MaterialCommunityIcons name="fire" size={20} color="#FF5252" />
-									<Text style={styles.statText}>High Intensity</Text>
+									<Text style={styles.statText}>Featured</Text>
 								</View>
 								<View style={styles.statItem}>
 									<MaterialCommunityIcons name="account-group" size={20} color="#aaa" />
-									<Text style={styles.statText}>142 Debating</Text>
+									<Text style={styles.statText}>{featuredDebate?.participant_count || 0} Debating</Text>
 								</View>
 							</View>
 
 							<Button
 								mode="contained"
-								onPress={() => { }}
+								onPress={() => featuredDebate && navigation.navigate('GroupDebate', { debateId: featuredDebate.id })}
 								style={styles.joinButton}
 								labelStyle={styles.joinButtonLabel}
+								disabled={!featuredDebate}
 							>
 								JOIN THE FRAY
 							</Button>
@@ -84,32 +101,37 @@ export default function GroupDebateLobbyScreen() {
 
 					<Text style={styles.sectionTitle}>Active Rings</Text>
 
-					{ACTIVE_DEBATES.map((debate) => (
-						<TouchableOpacity key={debate.id} onPress={() => navigation.navigate('GroupDebate')}>
-							<Surface style={styles.debateCard} elevation={2}>
-								<View style={styles.cardLeft}>
-									<View style={[styles.iconContainer, { backgroundColor: 'rgba(255,255,255,0.05)' }]}>
-										<MaterialCommunityIcons name="sword-cross" size={24} color={debate.color} />
+					{loading ? (
+						<ActivityIndicator size="large" color="#BB86FC" style={{ marginTop: 20 }} />
+					) : debates.length === 0 ? (
+						<Text style={{ color: '#aaa', textAlign: 'center', marginTop: 20 }}>No active debates</Text>
+					) : (
+						debates.map((debate) => (
+							<TouchableOpacity key={debate.id} onPress={() => navigation.navigate('GroupDebate', { debateId: debate.id })}>
+								<Surface style={styles.debateCard} elevation={2}>
+									<View style={styles.cardLeft}>
+										<View style={[styles.iconContainer, { backgroundColor: 'rgba(255,255,255,0.05)' }]}>
+											<MaterialCommunityIcons name="sword-cross" size={24} color="#BB86FC" />
+										</View>
 									</View>
-								</View>
-								<View style={styles.cardCenter}>
-									<Text style={styles.debateTopic}>{debate.topic}</Text>
-									<View style={styles.cardMeta}>
-										<Text style={styles.metaText}>{debate.participants} active</Text>
-										<Text style={styles.metaDot}>•</Text>
-										<Text style={[styles.metaText, { color: debate.color }]}>{debate.status}</Text>
+									<View style={styles.cardCenter}>
+										<Text style={styles.debateTopic}>{debate.topic}</Text>
+										<View style={styles.cardMeta}>
+											<Text style={styles.metaText}>{debate.participant_count} active</Text>
+											<Text style={styles.metaDot}>•</Text>
+											<Text style={[styles.metaText, { color: '#BB86FC' }]}>{debate.status}</Text>
+										</View>
 									</View>
-								</View>
-								<View style={styles.cardRight}>
-									<Text style={styles.timeLeft}>{debate.timeLeft}</Text>
-									<MaterialCommunityIcons name="chevron-right" size={24} color="#666" />
-								</View>
-							</Surface>
-						</TouchableOpacity>
-					))}
+									<View style={styles.cardRight}>
+										<MaterialCommunityIcons name="chevron-right" size={24} color="#666" />
+									</View>
+								</Surface>
+							</TouchableOpacity>
+						))
+					)}
 
 					{/* Create New Group */}
-					<TouchableOpacity style={styles.createButton}>
+					<TouchableOpacity style={styles.createButton} onPress={handleCreateDebate}>
 						<LinearGradient
 							colors={['#2a2a3a', '#1e1e2e']}
 							style={styles.createGradient}
@@ -121,7 +143,7 @@ export default function GroupDebateLobbyScreen() {
 
 				</ScrollView>
 			</LinearGradient>
-		</View >
+		</View>
 	);
 }
 
@@ -274,11 +296,6 @@ const styles = StyleSheet.create({
 	},
 	cardRight: {
 		alignItems: 'flex-end',
-	},
-	timeLeft: {
-		color: '#666',
-		fontSize: 12,
-		marginBottom: 4,
 	},
 	createButton: {
 		marginTop: 10,

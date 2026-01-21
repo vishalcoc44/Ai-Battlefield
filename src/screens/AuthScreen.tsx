@@ -9,18 +9,48 @@ const { width, height } = Dimensions.get('window');
 export default function AuthScreen() {
 	const [email, setEmail] = useState('');
 	const [password, setPassword] = useState('');
+	const [username, setUsername] = useState('');
 	const [loading, setLoading] = useState(false);
 	const [isLogin, setIsLogin] = useState(true);
 
 	async function handleAuth() {
 		setLoading(true);
-		const { error } = isLogin
-			? await supabase.auth.signInWithPassword({ email, password })
-			: await supabase.auth.signUp({ email, password });
+
+		if (isLogin) {
+			const { error } = await supabase.auth.signInWithPassword({ email, password });
+			if (error) {
+				alert(error.message);
+			}
+			setLoading(false);
+			return;
+		}
+
+		// Sign up flow
+		const { data, error } = await supabase.auth.signUp({
+			email,
+			password,
+			options: {
+				data: {
+					username: username.trim() || null,
+				}
+			}
+		});
 
 		if (error) {
 			alert(error.message);
-		} else if (!isLogin) {
+		} else if (data.user) {
+			// Create profile with username if provided
+			if (username.trim()) {
+				const { error: profileError } = await supabase
+					.from('profiles')
+					.insert({
+						id: data.user.id,
+						username: username.trim(),
+					});
+				if (profileError) {
+					console.error('Error creating profile:', profileError);
+				}
+			}
 			alert('Check your inbox for email verification!');
 		}
 		setLoading(false);
@@ -54,6 +84,20 @@ export default function AuthScreen() {
 							theme={{ colors: { primary: '#BB86FC', outline: '#555' } }}
 							textColor="#fff"
 						/>
+						{!isLogin && (
+							<TextInput
+								label="Display Name (Optional)"
+								value={username}
+								onChangeText={setUsername}
+								autoCapitalize="words"
+								mode="outlined"
+								style={styles.input}
+								theme={{ colors: { primary: '#BB86FC', outline: '#555' } }}
+								textColor="#fff"
+								placeholder="Choose your display name"
+								maxLength={30}
+							/>
+						)}
 						<TextInput
 							label="Password"
 							value={password}

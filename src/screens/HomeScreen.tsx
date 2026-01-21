@@ -1,16 +1,34 @@
-import React from 'react';
-import { View, StyleSheet, ScrollView, Image, TouchableOpacity, Dimensions } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { View, StyleSheet, ScrollView, Image, TouchableOpacity, Dimensions, ActivityIndicator } from 'react-native';
 import { Text, Surface, IconButton, ProgressBar, Avatar } from 'react-native-paper';
 import { useNavigation } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { useAuth } from '../context/AuthContext';
+import { getUserProfile, UserProfile } from '../services/profileService';
 
 const { width } = Dimensions.get('window');
 
 export default function HomeScreen() {
 	const navigation = useNavigation<any>();
 	const insets = useSafeAreaInsets();
+	const { session } = useAuth();
+	const [profile, setProfile] = useState<UserProfile | null>(null);
+	const [loading, setLoading] = useState(true);
+
+	useEffect(() => {
+		loadProfile();
+	}, [session]);
+
+	const loadProfile = async () => {
+		if (!session?.user?.id) return;
+
+		setLoading(true);
+		const profileData = await getUserProfile(session.user.id);
+		setProfile(profileData);
+		setLoading(false);
+	};
 
 	return (
 		<View style={styles.container}>
@@ -24,15 +42,18 @@ export default function HomeScreen() {
 						<TouchableOpacity style={styles.profileRow} onPress={() => navigation.navigate('IntellectualResume')}>
 							<Avatar.Image size={40} source={{ uri: 'https://i.pravatar.cc/150?img=12' }} />
 							<View style={styles.profileInfo}>
-								<Text style={styles.profileName}>Eonva Kovedias</Text>
-								<Text style={styles.profileTitle}>Master Strategist</Text>
+								<Text style={styles.profileName}>{profile?.username || 'Loading...'}</Text>
+								<Text style={styles.profileTitle}>Level {profile?.level || 1} • {profile?.total_debates || 0} Debates</Text>
 							</View>
-							<IconButton icon="incognito" iconColor="#fff" size={24} onPress={() => navigation.navigate('AnonymousLobby')} />
+							<View style={styles.headerActions}>
+								<IconButton icon="history" iconColor="#fff" size={24} onPress={() => navigation.navigate('BeliefTracker')} />
+								<IconButton icon="incognito" iconColor="#fff" size={24} onPress={() => navigation.navigate('AnonymousLobby')} />
+							</View>
 						</TouchableOpacity>
 
 						<View style={styles.scoreContainer}>
-							<Text style={styles.scoreValue}>1,847</Text>
-							<Text style={styles.scoreLabel}>Cognitive Gladiator</Text>
+							<Text style={styles.scoreValue}>{profile?.xp || 0}</Text>
+							<Text style={styles.scoreLabel}>XP • {profile?.views_changed || 0} Views Changed</Text>
 						</View>
 					</View>
 
@@ -115,14 +136,15 @@ export default function HomeScreen() {
 						<MaterialCommunityIcons name="home" size={28} color="#fff" />
 						<Text style={[styles.navText, { color: '#fff' }]}>Home</Text>
 					</View>
-					<TouchableOpacity style={styles.navItem} onPress={() => navigation.navigate('BeliefTracker')}>
-						<MaterialCommunityIcons name="history" size={24} color="#666" />
-						<Text style={styles.navText}>History</Text>
+					<TouchableOpacity style={styles.navItem} onPress={() => navigation.navigate('Communities')}>
+						<MaterialCommunityIcons name="account-group" size={24} color="#666" />
+						<Text style={styles.navText}>Communities</Text>
 					</TouchableOpacity>
-					<TouchableOpacity style={styles.navItem} onPress={() => navigation.navigate('GroupDebateLobby')}>
+					<TouchableOpacity style={[styles.navItem, styles.centerNavItem]} onPress={() => navigation.navigate('GroupDebateLobby')}>
 						<View style={styles.navCircle}>
 							<MaterialCommunityIcons name="sword-cross" size={24} color="#fff" />
 						</View>
+						<Text style={[styles.navText, { color: '#FF5252' }]}>Debate</Text>
 					</TouchableOpacity>
 					<TouchableOpacity style={styles.navItem} onPress={() => navigation.navigate('BlindSpot')}>
 						<MaterialCommunityIcons name="trophy-outline" size={24} color="#666" />
@@ -161,6 +183,10 @@ const styles = StyleSheet.create({
 	profileInfo: {
 		flex: 1,
 		marginLeft: 12,
+	},
+	headerActions: {
+		flexDirection: 'row',
+		alignItems: 'center',
 	},
 	profileName: {
 		color: '#fff',
@@ -349,7 +375,7 @@ const styles = StyleSheet.create({
 	},
 	bottomNav: {
 		flexDirection: 'row',
-		justifyContent: 'space-around',
+		justifyContent: 'space-evenly',
 		alignItems: 'center',
 		paddingVertical: 15,
 		backgroundColor: '#161625',
@@ -362,11 +388,18 @@ const styles = StyleSheet.create({
 	},
 	navItem: {
 		alignItems: 'center',
+		justifyContent: 'center',
+		minHeight: 70,
+		flex: 1,
+	},
+	centerNavItem: {
+		flex: 1.5, // Give center item more space to appear more centered
 	},
 	navText: {
 		color: '#666',
 		fontSize: 10,
 		marginTop: 4,
+		textAlign: 'center',
 	},
 	navCircle: {
 		width: 50,
@@ -375,7 +408,6 @@ const styles = StyleSheet.create({
 		backgroundColor: '#FF5252',
 		justifyContent: 'center',
 		alignItems: 'center',
-		marginTop: -25, // Float effect
 		elevation: 5,
 		shadowColor: '#FF5252',
 		shadowOffset: { width: 0, height: 4 },
